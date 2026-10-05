@@ -218,6 +218,7 @@ body.in-dashboard {{
 
 <script>
 window.__GROQ_API_KEY__ = "{api_key}";
+window.__IS_STREAMLIT__ = true;
 
 // Smooth Section Navigation for Home, About, Contact
 window.switchTab = function(tabName) {{

@@ -708,17 +708,31 @@ async function send(q, humanApproved = false) {
     let replyText = '';
     let apiError = '';
     
-    // 1. Try local / backend /api/chat if available
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: q, human_approved: humanApproved })
-    }).catch(() => null);
+    // 1. Try local / backend /api/chat ONLY if NOT in Streamlit Cloud / iframe
+    const isStreamlitEnv = !!window.__IS_STREAMLIT__ || 
+                           window.location.hostname.includes('streamlit.app') || 
+                           window.location.port === '8501' || 
+                           window.location.protocol === 'file:';
 
-    if (res && res.ok) {
-      const data = await res.json();
-      if (data && data.reply && !data.needs_key) {
-        replyText = data.reply;
+    if (!isStreamlitEnv) {
+      try {
+        const res = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: q, human_approved: humanApproved })
+        }).catch(() => null);
+
+        if (res && res.ok) {
+          const contentType = res.headers.get('content-type') || '';
+          if (contentType.includes('application/json')) {
+            const data = await res.json().catch(() => null);
+            if (data && data.reply && !data.needs_key) {
+              replyText = data.reply;
+            }
+          }
+        }
+      } catch (backendErr) {
+        console.warn('Backend /api/chat skipped:', backendErr);
       }
     }
 
@@ -738,7 +752,13 @@ async function send(q, humanApproved = false) {
         return;
       }
 
-      const modelsToTry = ['qwen/qwen3.8-27b', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
+      const modelsToTry = [
+        'llama-3.3-70b-versatile',
+        'llama-3.1-8b-instant',
+        'qwen/qwen3.8-27b',
+        'openai/gpt-oss-120b',
+        'openai/gpt-oss-20b'
+      ];
       for (const modelName of modelsToTry) {
         try {
           const groqRes = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -762,8 +782,8 @@ async function send(q, humanApproved = false) {
           });
 
           if (groqRes && groqRes.ok) {
-            const groqData = await groqRes.json();
-            replyText = groqData.choices?.[0]?.message?.content || groqData.choices?.[0]?.message?.reasoning || '';
+            const groqData = await groqRes.json().catch(() => null);
+            replyText = groqData?.choices?.[0]?.message?.content || groqData?.choices?.[0]?.message?.reasoning || '';
             if (replyText) {
               apiError = '';
               break;
