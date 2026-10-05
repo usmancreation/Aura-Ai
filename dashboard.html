@@ -478,13 +478,7 @@ function add(role, html) {
 
 // Placeholder replies: replace reply() with a call to your CrewAI/Groq backend
 function reply(q) {
-  const t = q.toLowerCase();
-  if (t.includes('roadmap')) return 'Here is a starting career outline: <b>Phase 1</b> web fundamentals and OWASP Top 10, <b>Phase 2</b> Burp Suite and hands-on labs, <b>Phase 3</b> a portfolio project and a bug bounty or CTF. Which free resources should I attach to each phase?';
-  if (t.includes('grc') || t.includes('compare')) return 'VAPT is hands-on and technical (testing and exploiting systems). GRC is policy, risk and compliance work. Do you prefer building and breaking things, or writing policy and auditing? That decides the better fit.';
-  if (t.includes('free') || t.includes('resource')) return 'Good free starting points: PortSwigger Web Security Academy, OWASP WebGoat and Juice Shop, TryHackMe free rooms. Want me to match them to your current level?';
-  if (t.includes('skill')) return 'To analyze your skills I need to know what you already have. Tell me your top three skills and your target role.';
-  if (t.includes('job') || t.includes('opportunit')) return 'I can look up current openings. Which role and location should I search for?';
-  return 'Thanks for sharing that. Tell me a bit more about your goal and current experience so I can tailor my advice.';
+  return '✦ **Aura Career Navigator:** Real-time AI reasoning is active. Please ask any question about career paths, learning roadmaps, skills assessment, or job applications.';
 }
 
 function formatAuraMarkdown(text) {

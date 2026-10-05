@@ -143,17 +143,17 @@ def get_unified_html(api_key: str) -> str:
     dash_styles = "\n".join(re.findall(r"<style>([\s\S]*?)</style>", dash_html))
 
     # Extract index body
-    idx_body_match = re.search(r"<body>([\s\S]*?)<script src=[\"']static/js/aura_auth.js[\"']>", idx_html)
-    if not idx_body_match:
-        idx_body_match = re.search(r"<body>([\s\S]*?)<script>", idx_html)
-    idx_body = idx_body_match.group(1) if idx_body_match else ""
+    idx_body_full = re.search(r"<body>([\s\S]*?)</body>", idx_html)
+    idx_raw = idx_body_full.group(1) if idx_body_full else idx_html
+    idx_body = re.sub(r"<script[\s\S]*?</script>", "", idx_raw)
 
     # Extract index scripts
     idx_scripts = "\n".join(re.findall(r"<script>([\s\S]*?)</script>", idx_html))
 
-    # Extract dashboard body
-    dash_body_match = re.search(r"<body>([\s\S]*?)<script>", dash_html)
-    dash_body = dash_body_match.group(1) if dash_body_match else ""
+    # Extract dashboard body (preserves all modals and content)
+    dash_body_full = re.search(r"<body>([\s\S]*?)</body>", dash_html)
+    dash_raw = dash_body_full.group(1) if dash_body_full else dash_html
+    dash_body = re.sub(r"<script[\s\S]*?</script>", "", dash_raw)
 
     # Extract dashboard scripts
     dash_scripts = "\n".join(re.findall(r"<script>([\s\S]*?)</script>", dash_html))
