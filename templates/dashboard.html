@@ -757,14 +757,19 @@ async function send(q, humanApproved = false) {
                 { role: 'user', content: q }
               ],
               temperature: 0.3,
-              max_tokens: 1800
+              max_tokens: 800
             })
           });
 
           if (groqRes && groqRes.ok) {
             const groqData = await groqRes.json();
             replyText = groqData.choices?.[0]?.message?.content || groqData.choices?.[0]?.message?.reasoning || '';
-            if (replyText) break;
+            if (replyText) {
+              apiError = '';
+              break;
+            } else {
+              apiError = 'Model ' + modelName + ' returned an empty response. Retrying fallback...';
+            }
           } else if (groqRes) {
             const errJson = await groqRes.json().catch(() => ({}));
             apiError = errJson.error?.message || ('HTTP ' + groqRes.status + ' ' + groqRes.statusText);
@@ -779,19 +784,18 @@ async function send(q, humanApproved = false) {
 
     if (!replyText) {
       if (apiError) {
-        replyText = '⚠️ **Groq API Error on Live Deployment:**\n\n' + apiError + '\n\n' +
-          '• Please verify your API key or quota.\n' +
-          '• Click the button below to update your key.\n\n' +
+        replyText = '⚠️ **Groq AI Notice:**\n\n' + apiError + '\n\n' +
+          '• Please verify your Groq API key or try again.\n\n' +
           '<button type="button" onclick="window.openApiKeyModal()" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;background:rgba(239,68,68,0.2);color:#fca5a5;border:1px solid rgba(239,68,68,0.4);border-radius:8px;font-weight:600;font-size:0.84rem;cursor:pointer;">🔑 Update Groq API Key</button>';
       } else {
-        replyText = reply(q);
+        replyText = '✦ **Aura Career Navigator:** Please repeat your question or click **🔑 Connect Live AI** above to refresh your Groq connection.';
       }
     }
 
     const formatted = formatAuraMarkdown(replyText);
     typing.querySelector('.bub').innerHTML = formatted + '<time>' + time() + '</time>';
   } catch (err) {
-    typing.querySelector('.bub').innerHTML = formatAuraMarkdown(reply(q)) + '<time>' + time() + '</time>';
+    typing.querySelector('.bub').innerHTML = formatAuraMarkdown('⚠️ **Groq AI Connection Error:** ' + (err.message || String(err))) + '<time>' + time() + '</time>';
   }
   msgs.scrollTop = msgs.scrollHeight;
 }
