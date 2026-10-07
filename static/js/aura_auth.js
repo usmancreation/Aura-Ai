@@ -1,9 +1,55 @@
 /**
- * aura_auth.js - Centralized Authentication & Header State Manager for AuraAI
- * Connects forms with SQLite database backend, manages session, dynamic header & dashboard.
+ * aura_auth.js - Centralized Authentication & Authorization for AuraAI
+ * Powered by Firebase Authentication & Google Cloud Firestore Database.
+ * Connects all forms with Firebase Auth & Firestore, manages session tokens, dynamic header, and route protection.
  */
 (function(window) {
   const STORAGE_KEY = 'aura_user';
+
+  const FIREBASE_CONFIG = {
+    apiKey: "AIzaSyDOv6h1H6gbYn8RyYImq-m5OTjvLu9Edc4",
+    authDomain: "aura-c07ad.firebaseapp.com",
+    projectId: "aura-c07ad",
+    storageBucket: "aura-c07ad.firebasestorage.app",
+    messagingSenderId: "422030901114",
+    appId: "1:422030901114:web:c6b0eb3bf6b22d93b160c3"
+  };
+
+  const AUTH_BASE = "https://identitytoolkit.googleapis.com/v1/accounts";
+  const FIRESTORE_BASE = `https://firestore.googleapis.com/v1/projects/${FIREBASE_CONFIG.projectId}/databases/(default)/documents`;
+
+  // Firestore helper: convert Firestore JSON fields to plain JS object
+  function parseFirestoreFields(fields) {
+    if (!fields) return {};
+    const res = {};
+    for (const key in fields) {
+      const val = fields[key];
+      if (val.stringValue !== undefined) res[key] = val.stringValue;
+      else if (val.integerValue !== undefined) res[key] = parseInt(val.integerValue, 10);
+      else if (val.booleanValue !== undefined) res[key] = val.booleanValue;
+      else if (val.doubleValue !== undefined) res[key] = parseFloat(val.doubleValue);
+      else if (val.timestampValue !== undefined) res[key] = val.timestampValue;
+      else res[key] = val;
+    }
+    return res;
+  }
+
+  // Firestore helper: convert plain JS object to Firestore typed fields
+  function toFirestoreFields(obj) {
+    const fields = {};
+    for (const key in obj) {
+      const val = obj[key];
+      if (typeof val === 'string') {
+        fields[key] = { stringValue: val };
+      } else if (typeof val === 'number') {
+        if (Number.isInteger(val)) fields[key] = { integerValue: String(val) };
+        else fields[key] = { doubleValue: val };
+      } else if (typeof val === 'boolean') {
+        fields[key] = { booleanValue: val };
+      }
+    }
+    return { fields };
+  }
 
   const AuraAuth = {
     getUser: function() {
@@ -27,90 +73,233 @@
       localStorage.removeItem(STORAGE_KEY);
     },
 
+    isAuthenticated: function() {
+      const u = this.getUser();
+      return !!(u && u.name && u.uid && (u.idToken || u.provider === 'firebase'));
+    },
+
     checkAuth: async function() {
-      try {
-        const res = await fetch('/api/auth/me');
-        if (res.ok) {
-          const data = await res.json();
-          if (data.authenticated && data.user) {
-            this.setUser(data.user);
-            return data.user;
+      const user = this.getUser();
+      if (!user) return null;
+
+      // Auto-refresh Firebase ID token if close to expiry
+      if (user.refreshToken && user.expiresAt && Date.now() > (user.expiresAt - 300000)) {
+        try {
+          const rfRes = await fetch(`https://securetoken.googleapis.com/v1/token?key=${FIREBASE_CONFIG.apiKey}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(user.refreshToken)}`
+          });
+          if (rfRes.ok) {
+            const rfData = await rfRes.json();
+            user.idToken = rfData.id_token;
+            user.refreshToken = rfData.refresh_token;
+            user.expiresAt = Date.now() + (parseInt(rfData.expires_in || 3600, 10) * 1000);
+            this.setUser(user);
           }
+        } catch (e) {
+          console.warn('Token auto-refresh notice:', e);
         }
-      } catch (e) {}
-      
-      // If server session expired but local storage has user, try sync or keep
-      const local = this.getUser();
-      return local;
+      }
+      return user;
     },
 
     login: async function(email, password) {
+      email = (email || '').trim();
+      password = password || '';
+      if (!email || !password) {
+        return { success: false, error: 'Email and password are required.' };
+      }
+
       try {
-        const res = await fetch('/api/auth/login', {
+        // 1. Firebase Authentication: signInWithPassword
+        const authRes = await fetch(`${AUTH_BASE}:signInWithPassword?key=${FIREBASE_CONFIG.apiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: email.trim(), password: password })
+          body: JSON.stringify({ email: email, password: password, returnSecureToken: true })
         });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          this.setUser(data.user);
-          return { success: true, user: data.user };
-        } else {
-          return { success: false, error: data.error || 'Invalid email or password.' };
+        const authData = await authRes.json();
+
+        if (!authRes.ok) {
+          const errCode = authData.error?.message || 'LOGIN_FAILED';
+          const friendly = {
+            'EMAIL_NOT_FOUND': 'No account found with this email.',
+            'INVALID_PASSWORD': 'Incorrect password. Please try again.',
+            'USER_DISABLED': 'This user account has been disabled.',
+            'TOO_MANY_ATTEMPTS_TRY_LATER': 'Access temporarily blocked due to many failed attempts. Try again later.'
+          }[errCode] || authData.error?.message || 'Authentication failed.';
+          return { success: false, error: friendly };
         }
-      } catch (err) {
-        // Fallback for standalone / Streamlit Cloud client deployment
+
+        const uid = authData.localId;
+        const idToken = authData.idToken;
+        const refreshToken = authData.refreshToken;
+
+        // 2. Fetch User Profile from Google Cloud Firestore Database
+        let profile = {
+          name: email.split('@')[0],
+          role: 'Tech Professional',
+          career_goal: 'Full-Stack & AI Engineer',
+          progress: 20
+        };
+
         try {
-          const accounts = JSON.parse(localStorage.getItem('aura_accounts') || '[]');
-          const found = accounts.find(a => a.email.toLowerCase() === email.trim().toLowerCase());
-          if (found && found.password === password) {
-            const userData = { id: found.id || 1, name: found.name, email: found.email, initials: this.getInitials(found.name) };
-            this.setUser(userData);
-            return { success: true, user: userData };
-          } else if (found) {
-            return { success: false, error: 'Incorrect password.' };
+          const fsRes = await fetch(`${FIRESTORE_BASE}/users/${uid}`, {
+            headers: { 'Authorization': `Bearer ${idToken}` }
+          });
+          if (fsRes.ok) {
+            const fsData = await fsRes.json();
+            const loaded = parseFirestoreFields(fsData.fields);
+            if (loaded && loaded.name) {
+              profile = Object.assign(profile, loaded);
+            }
           } else {
-            // First demo user fallback
-            const userData = { id: 1, name: email.split('@')[0], email: email.trim(), initials: this.getInitials(email) };
-            this.setUser(userData);
-            return { success: true, user: userData };
+            // First time Firestore write for this existing account
+            await fetch(`${FIRESTORE_BASE}/users/${uid}`, {
+              method: 'PATCH',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${idToken}`
+              },
+              body: JSON.stringify(toFirestoreFields({
+                uid: uid,
+                name: profile.name,
+                email: email,
+                role: profile.role,
+                career_goal: profile.career_goal,
+                progress: profile.progress,
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              }))
+            }).catch(() => null);
           }
-        } catch (e) {
-          return { success: false, error: 'Authentication failed.' };
+        } catch (fsErr) {
+          console.warn('Firestore fetch notice:', fsErr);
         }
+
+        const userObj = {
+          id: uid,
+          uid: uid,
+          name: profile.name,
+          email: email,
+          role: profile.role || 'Tech Professional',
+          career_goal: profile.career_goal || '',
+          progress: profile.progress || 20,
+          idToken: idToken,
+          refreshToken: refreshToken,
+          expiresAt: Date.now() + (parseInt(authData.expiresIn || 3600, 10) * 1000),
+          initials: this.getInitials(profile.name),
+          provider: 'firebase'
+        };
+
+        this.setUser(userObj);
+        this.updatePublicHeader();
+
+        // Also sync with backend session if available
+        fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email, password: password })
+        }).catch(() => null);
+
+        return { success: true, user: userObj };
+      } catch (netErr) {
+        return { success: false, error: 'Network error connecting to Firebase: ' + (netErr.message || String(netErr)) };
       }
     },
 
     register: async function(name, email, password) {
+      name = (name || '').trim();
+      email = (email || '').trim();
+      password = password || '';
+
+      if (!name || name.length < 2) {
+        return { success: false, error: 'Please enter your full name.' };
+      }
+      if (!email) {
+        return { success: false, error: 'Please enter a valid email address.' };
+      }
+      if (!password || password.length < 6) {
+        return { success: false, error: 'Password must be at least 6 characters.' };
+      }
+
       try {
-        const res = await fetch('/api/auth/register', {
+        // 1. Firebase Authentication: signUp
+        const authRes = await fetch(`${AUTH_BASE}:signUp?key=${FIREBASE_CONFIG.apiKey}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: name.trim(), email: email.trim(), password: password })
+          body: JSON.stringify({ email: email, password: password, returnSecureToken: true })
         });
-        const data = await res.json();
-        if (res.ok && data.success) {
-          this.setUser(data.user);
-          return { success: true, user: data.user };
-        } else {
-          return { success: false, error: data.error || 'Failed to register account.' };
+        const authData = await authRes.json();
+
+        if (!authRes.ok) {
+          const errCode = authData.error?.message || 'SIGNUP_FAILED';
+          const friendly = {
+            'EMAIL_EXISTS': 'An account with this email address already exists.',
+            'OPERATION_NOT_ALLOWED': 'Password sign-in is not enabled in Firebase.',
+            'TOO_MANY_ATTEMPTS_TRY_LATER': 'Too many attempts. Please try again later.',
+            'WEAK_PASSWORD : Password should be at least 6 characters': 'Password should be at least 6 characters.'
+          }[errCode] || authData.error?.message || 'Registration failed.';
+          return { success: false, error: friendly };
         }
-      } catch (err) {
-        // Fallback for standalone / Streamlit Cloud client deployment
+
+        const uid = authData.localId;
+        const idToken = authData.idToken;
+        const refreshToken = authData.refreshToken;
+
+        // 2. Write User Document into Google Cloud Firestore Database
+        const docPayload = toFirestoreFields({
+          uid: uid,
+          name: name,
+          email: email,
+          role: 'Tech Professional',
+          career_goal: 'AI & Career Acceleration',
+          progress: 20,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        });
+
         try {
-          let accounts = JSON.parse(localStorage.getItem('aura_accounts') || '[]');
-          if (accounts.some(a => a.email.toLowerCase() === email.trim().toLowerCase())) {
-            return { success: false, error: 'An account with this email already exists.' };
-          }
-          const newUser = { id: Date.now(), name: name.trim(), email: email.trim(), password: password };
-          accounts.push(newUser);
-          localStorage.setItem('aura_accounts', JSON.stringify(accounts));
-          const userData = { id: newUser.id, name: newUser.name, email: newUser.email, initials: this.getInitials(newUser.name) };
-          this.setUser(userData);
-          return { success: true, user: userData };
-        } catch (e) {
-          return { success: false, error: 'Registration failed.' };
+          await fetch(`${FIRESTORE_BASE}/users/${uid}`, {
+            method: 'PATCH',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${idToken}`
+            },
+            body: JSON.stringify(docPayload)
+          });
+        } catch (fsErr) {
+          console.warn('Firestore write notice:', fsErr);
         }
+
+        const userObj = {
+          id: uid,
+          uid: uid,
+          name: name,
+          email: email,
+          role: 'Tech Professional',
+          career_goal: 'AI & Career Acceleration',
+          progress: 20,
+          idToken: idToken,
+          refreshToken: refreshToken,
+          expiresAt: Date.now() + (parseInt(authData.expiresIn || 3600, 10) * 1000),
+          initials: this.getInitials(name),
+          provider: 'firebase'
+        };
+
+        this.setUser(userObj);
+        this.updatePublicHeader();
+
+        // Also sync with backend session if available
+        fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name, email: email, password: password })
+        }).catch(() => null);
+
+        return { success: true, user: userObj };
+      } catch (netErr) {
+        return { success: false, error: 'Network error connecting to Firebase: ' + (netErr.message || String(netErr)) };
       }
     },
 
@@ -242,15 +431,19 @@
      * Redirects to signin if not authenticated.
      */
     initDashboard: function() {
-      const user = this.getUser();
-      if (!user || !user.name) {
+      if (!this.isAuthenticated()) {
         if (typeof window.navigateTo === 'function') {
           window.navigateTo('home');
+          setTimeout(() => {
+            if (typeof openModal === 'function') openModal('login');
+          }, 300);
           return;
         }
         window.location.href = 'signin.html';
         return;
       }
+
+      const user = this.getUser();
 
       // Populate user info dynamically
       const unameEl = document.getElementById('uname');

@@ -54,12 +54,25 @@ def api_register():
     email = data.get("email", "").strip()
     password = data.get("password", "").strip()
 
-    success, user_data, error_msg = register_user(name, email, password)
-    if not success:
-        return jsonify({"success": False, "error": error_msg}), 400
-
-    session["user"] = user_data
-    return jsonify({"success": True, "user": user_data, "message": "Account created successfully."})
+    try:
+        from firebase_service import register_user as fb_register
+        fb_res = fb_register(name, email, password)
+        user_data = {
+            "id": fb_res.get("uid"),
+            "uid": fb_res.get("uid"),
+            "name": fb_res.get("name"),
+            "email": fb_res.get("email"),
+            "role": "Tech Professional",
+            "id_token": fb_res.get("id_token", ""),
+        }
+        session["user"] = user_data
+        return jsonify({"success": True, "user": user_data, "message": "Account created in Firebase."})
+    except Exception as fb_err:
+        success, user_data, error_msg = register_user(name, email, password)
+        if success:
+            session["user"] = user_data
+            return jsonify({"success": True, "user": user_data, "message": "Account created successfully."})
+        return jsonify({"success": False, "error": str(fb_err) or error_msg}), 400
 
 @app.post("/api/auth/login")
 def api_login():
@@ -67,12 +80,25 @@ def api_login():
     email = data.get("email", "").strip()
     password = data.get("password", "").strip()
 
-    success, user_data, error_msg = authenticate_user(email, password)
-    if not success:
-        return jsonify({"success": False, "error": error_msg}), 401
-
-    session["user"] = user_data
-    return jsonify({"success": True, "user": user_data, "message": "Logged in successfully."})
+    try:
+        from firebase_service import login_user as fb_login
+        fb_res = fb_login(email, password)
+        user_data = {
+            "id": fb_res.get("uid"),
+            "uid": fb_res.get("uid"),
+            "name": fb_res.get("name"),
+            "email": fb_res.get("email"),
+            "role": "Tech Professional",
+            "id_token": fb_res.get("id_token", ""),
+        }
+        session["user"] = user_data
+        return jsonify({"success": True, "user": user_data, "message": "Logged in via Firebase."})
+    except Exception as fb_err:
+        success, user_data, error_msg = authenticate_user(email, password)
+        if success:
+            session["user"] = user_data
+            return jsonify({"success": True, "user": user_data, "message": "Logged in successfully."})
+        return jsonify({"success": False, "error": str(fb_err) or error_msg}), 401
 
 @app.route("/api/auth/logout", methods=["GET", "POST"])
 def api_logout():

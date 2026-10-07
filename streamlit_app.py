@@ -243,6 +243,21 @@ window.navigateTo = function(target) {{
     const dash = document.getElementById('viewDashboard');
 
     if (target === 'dashboard') {{
+        // Enforce Firebase Authorization: prompt login if not authenticated
+        const isAuth = (window.AuraAuth && window.AuraAuth.isAuthenticated) ? window.AuraAuth.isAuthenticated() : false;
+        if (!isAuth) {{
+            if (typeof openModal === 'function') {{
+                openModal('login');
+            }} else {{
+                const ov = document.getElementById('overlay');
+                if (ov) {{
+                    ov.classList.add('show');
+                    ov.removeAttribute('aria-hidden');
+                }}
+            }}
+            return;
+        }}
+
         // If modal was open, close it
         if (typeof closeModal === 'function') {{
             closeModal();
